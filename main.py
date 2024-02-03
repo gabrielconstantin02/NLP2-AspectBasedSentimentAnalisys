@@ -21,12 +21,11 @@
 # We fine-tuned a variable number of encoders and the others were frozen
 
 seed = 8
-
 from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenClassification
 from tqdm import tqdm
 
 import re
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, classification_report
 import numpy as np
 np.random.seed(seed)
 np.random.RandomState(seed)
@@ -38,12 +37,12 @@ random.seed(seed)
 import torch
 import torch.nn as nn
 torch.manual_seed(seed)
-torch.use_deterministic_algorithms(True)
+# torch.use_deterministic_algorithms(True)
 
 # import jax
 # jax.random.PRNGKey(seed)
 
-from unidecode import unidecode
+# from unidecode import unidecode
 
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
@@ -55,13 +54,32 @@ MAX_LENGTH = 128
 EPOCHS = 10
 BATCH_SIZE = 16
 NUM_LAYERS_FROZEN = 8
+MODEL_NAME = "rest_model_Adam_128_16_clip_god_seed_v4.pt"
 
-with open("./nitro-lang-processing-1/train.json") as fin:
-    raw_train_data = json.load(fin)
-with open("./nitro-lang-processing-1/test.json") as fin:
-    raw_test_data = json.load(fin)
-with open("./nitro-lang-processing-1/tag_to_id.json") as fin:
-    tag_to_id = json.load(fin)
+def parse_input_file(filepath):
+    label_mapper = {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
+    with open(filepath) as f:
+        dataset = []
+        for line in f:
+            item = {
+                'tokens': [],
+                'labels': []
+            }
+            _, token_label_pairs = line.strip().split("####")
+            for token_label in token_label_pairs.split(" "):
+                # print(token_label)
+                token_label_split = token_label.split("=")
+                if len(token_label_split) == 2:
+                    token, label = token_label.split("=")
+                else:
+                    token = ''.join((len(token_label) - 2) * ['='])
+                    label = token_label[-1]
+                item['tokens'].extend([token])
+                item['labels'].extend([label_mapper[label]])
+            dataset.append(item)
+
+    return dataset
+    
 
 def read_dataset(dataset, tokenizer, train=True):
     data = []
@@ -76,7 +94,7 @@ def read_dataset(dataset, tokenizer, train=True):
             prelucrate_item.append(re.sub(r"\W+", 'n', token))
         for i in range(0, len(prelucrate_item), reshaped_length):
             reshaped_dataset.append(prelucrate_item[i: min(i + reshaped_length, len(prelucrate_item))])
-            reshaped_labels.append( item['ner_ids'][i: min(i + reshaped_length, len(item['ner_ids']))])
+            reshaped_labels.append( item['labels'][i: min(i + reshaped_length, len(item['labels']))])
 
     for index in range(len(reshaped_dataset)):
         items, sequence_labels =  reshaped_dataset[index], reshaped_labels[index]
@@ -110,56 +128,20 @@ def read_dataset(dataset, tokenizer, train=True):
 
     return data
 
-def read_dataset_old(dataset, tokenizer, train=True):
-    data = []
-    labels = []
-    max_length = 0
 
-    for item in dataset:
-        prelucrate_item = []
-        for token in item['tokens']:
-            prelucrate_item.append(re.sub(r"\W+", 'n', token))
-        sequence = tokenizer(
-            prelucrate_item,
-            is_split_into_words=True,
-            padding='max_length',
-            truncation=True,
-            max_length=MAX_LENGTH,
-            return_offsets_mapping=True
-        )
-        sequence = {key: torch.as_tensor(value) for key, value in sequence.items()}
-        data.append(sequence)
-
-        if train:
-            encoded_labels = np.ones(len(sequence["offset_mapping"]), dtype=int) * -100
-            sequence_labels = item['ner_ids']
-            # set only labels whose first offset position is 0 and the second is not 0
-            i = 0
-            for idx, offsets in enumerate(sequence["offset_mapping"]):
-                if offsets[0] == 0 and offsets[1] != 0:
-                    # overwrite label
-                    encoded_labels[idx] = sequence_labels[i]
-                    i += 1
-
-            # max_length = max(len(sequence), max_length)
-            labels.append(torch.as_tensor(encoded_labels))
-    # print(max_length)
-    if train:
-        return data, labels
-
-    return data
+raw_train_data = parse_input_file('data/laptop14/train.txt')
+raw_valid_data = parse_input_file('data/laptop14/test.txt')
 
 # https://huggingface.co/dumitrescustefan/bert-base-romanian-cased-v1
 # tokenizer is taken from the dumitrescustefan's pretrained BERT module from huggingface
-tokenizer = AutoTokenizer.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1")
+tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
 
-train_data, train_labels = read_dataset(raw_train_data, tokenizer=tokenizer)
-
-X_train, X_val, y_train, y_val = train_test_split(train_data, train_labels, test_size=0.2, random_state=seed)
+X_train, y_train = read_dataset(raw_train_data, tokenizer=tokenizer)
+X_val, y_val = read_dataset(raw_valid_data, tokenizer=tokenizer)
 
 # https://huggingface.co/dumitrescustefan/bert-base-romanian-cased-v1
 # Model is pretrained by Dumitrescu
-model = AutoModelForTokenClassification.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1", num_labels=len(tag_to_id))
+model = AutoModelForTokenClassification.from_pretrained('bert-base-cased', num_labels=4) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
 # for param in model.bert.parameters():
 #     param.requires_grad = False
 
@@ -172,7 +154,7 @@ for layer in model.bert.encoder.layer[:NUM_LAYERS_FROZEN]:
     for param in layer.parameters():
         param.requires_grad = False
 # ner_model = pipeline('ner', model=model, tokenizer=tokenizer)
-
+"""
 test = tokenizer(
     ["testând", "de", "trei", "ori"],
     is_split_into_words=True,
@@ -187,7 +169,7 @@ print(tokenizer.convert_tokens_to_ids(['test', '##ând']))
 print(tokenizer.convert_ids_to_tokens([23570]))
 
 print(train_labels[0])
-
+"""
 def pad(samples, max_length):
 
     return torch.tensor([
@@ -299,7 +281,7 @@ def train_epoch(model, train_dataloader, loss_crt, optimizer, device):
     epoch_loss = epoch_loss/num_batches
     epoch_acc = epoch_acc/num_batches
 
-    return epoch_loss, epoch_acc, labels
+    return epoch_loss, epoch_acc
 
 def eval_epoch(model, val_dataloader, loss_crt, device):
     model.eval()
@@ -338,9 +320,10 @@ def eval_epoch(model, val_dataloader, loss_crt, device):
     epoch_loss = epoch_loss/num_batches
     epoch_acc = epoch_acc/num_batches
 
-    return epoch_loss, epoch_acc, labels
+    print(classification_report(labels, predictions))
+    return epoch_loss, epoch_acc
 
-weights = np.zeros(16)
+weights = np.zeros(4)
 proper_labels = []
 for sequence in y_train:
     mini_label = []
@@ -354,7 +337,7 @@ max_weight = np.max(weights)
 for index, weight in enumerate(weights):
     weights[index] = max_weight / weights[index]
 print(weights)
-weights = compute_class_weight(class_weight="balanced", classes=np.arange(0, 16), y=proper_labels)
+weights = compute_class_weight(class_weight="balanced", classes=np.arange(0, 4), y=proper_labels)
 
 print(weights)
 
@@ -379,21 +362,21 @@ train_accuracies = []
 val_losses = []
 val_accuracies = []
 for epoch in range(1, EPOCHS+1):
-    train_loss, train_accuracy, pepega_labels = train_epoch(model, train_dataloader, loss_criterion, optimizer, device)
-    val_loss, val_accuracy, pepega_pepega_labels = eval_epoch(model, validation_dataloader, loss_criterion, device)
+    print('\nEpoch %d'%(epoch))
+    train_loss, train_accuracy = train_epoch(model, train_dataloader, loss_criterion, optimizer, device)
+    val_loss, val_accuracy = eval_epoch(model, validation_dataloader, loss_criterion, device)
     scheduler.step(val_loss)
     train_losses.append(train_loss)
     val_losses.append(val_loss)
     train_accuracies.append(train_accuracy)
     val_accuracies.append(val_accuracy)
-    print('\nEpoch %d'%(epoch))
     print('train loss: %10.8f, accuracy: %10.8f'%(train_loss, train_accuracy))
     print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
 
 # ! nvidia-smi
 
-model.save_pretrained("model_pretrained_Adam_128_16_god_seed_v4")
-torch.save(model.state_dict(), "model_Adam_128_16_clip_god_seed_v4.pt")
+model.save_pretrained(MODEL_NAME)
+torch.save(model.state_dict(), MODEL_NAME)
 
 # model.load_state_dict(torch.load("model_SGD_64_2.pt"))
 
@@ -412,6 +395,8 @@ torch.save(model.state_dict(), "model_Adam_128_16_clip_god_seed_v4.pt")
 # val_loss, val_accuracy, pepega_pepega_labels = eval_epoch(model, validation_dataloader, loss_criterion, device)
 # print(val_accuracy)
 
+
+"""
 def read_test(dataset, tokenizer):
     data = []
     max_length = 0
@@ -509,4 +494,4 @@ for pred in all_predictions:
     g.write(str(idx) + "," + str(pred.item()) + "\n")
     idx += 1
 g.close()
-
+"""
