@@ -1,25 +1,3 @@
-# ! pip install -q kaggle
-
-# ! mkdir ~/.kaggle
-
-# ! cp kaggle.json ~/.kaggle/
-#
-# ! chmod 600 ~/.kaggle/kaggle.json
-#
-# ! kaggle competitions download -c nitro-lang-processing-1
-#
-# ! mkdir nitro-lang-processing-1
-#
-# ! unzip nitro-lang-processing-1.zip -d nitro-lang-processing-1
-#
-# ! pip install unidecode
-# ! pip install transformers
-
-# https://huggingface.co/docs/transformers/model_doc/bert
-# https://huggingface.co/dumitrescustefan/bert-base-romanian-cased-v1
-# This project is a BERT model based with the pretraining made by Dumitrescu Stefan on a 15GB Romanian corpus
-# We fine-tuned a variable number of encoders and the others were frozen
-
 seed = 8
 from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenClassification
 from tqdm import tqdm
@@ -37,24 +15,17 @@ random.seed(seed)
 import torch
 import torch.nn as nn
 torch.manual_seed(seed)
-# torch.use_deterministic_algorithms(True)
-
-# import jax
-# jax.random.PRNGKey(seed)
-
-# from unidecode import unidecode
 
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
-import json
 
 
 MAX_LENGTH = 128
 EPOCHS = 10
 BATCH_SIZE = 16
 NUM_LAYERS_FROZEN = 8
-MODEL_NAME = "rest_model_Adam_128_16_clip_god_seed_v4.pt"
+MODEL_NAME = "laptop_bert_uncased_v4"
 
 def parse_input_file(filepath):
     label_mapper = {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
@@ -132,16 +103,13 @@ def read_dataset(dataset, tokenizer, train=True):
 raw_train_data = parse_input_file('data/laptop14/train.txt')
 raw_valid_data = parse_input_file('data/laptop14/test.txt')
 
-# https://huggingface.co/dumitrescustefan/bert-base-romanian-cased-v1
-# tokenizer is taken from the dumitrescustefan's pretrained BERT module from huggingface
-tokenizer = AutoTokenizer.from_pretrained('bert-base-cased')
+tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
 
 X_train, y_train = read_dataset(raw_train_data, tokenizer=tokenizer)
 X_val, y_val = read_dataset(raw_valid_data, tokenizer=tokenizer)
 
-# https://huggingface.co/dumitrescustefan/bert-base-romanian-cased-v1
-# Model is pretrained by Dumitrescu
-model = AutoModelForTokenClassification.from_pretrained('bert-base-cased', num_labels=4) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
+
+model = AutoModelForTokenClassification.from_pretrained('bert-base-uncased', num_labels=4) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
 # for param in model.bert.parameters():
 #     param.requires_grad = False
 
@@ -153,23 +121,8 @@ for param in model.bert.embeddings.parameters():
 for layer in model.bert.encoder.layer[:NUM_LAYERS_FROZEN]:
     for param in layer.parameters():
         param.requires_grad = False
-# ner_model = pipeline('ner', model=model, tokenizer=tokenizer)
-"""
-test = tokenizer(
-    ["testând", "de", "trei", "ori"],
-    is_split_into_words=True,
-    padding='max_length',
-    return_offsets_mapping=True,
-    truncation=False,
-    max_length=4
-)
-print(test)
-print(tokenizer.convert_ids_to_tokens([4231, 476]))
-print(tokenizer.convert_tokens_to_ids(['test', '##ând']))
-print(tokenizer.convert_ids_to_tokens([23570]))
 
-print(train_labels[0])
-"""
+
 def pad(samples, max_length):
 
     return torch.tensor([
@@ -177,10 +130,6 @@ def pad(samples, max_length):
         for sample in samples
     ])
 
-# padded_train_data = pad(train_data, 563)
-# padded_train_data[0]
-
-# print(padded_train_data.shape)
 
 class MyDataset(Dataset):
     def __init__(self, data, labels):
@@ -206,12 +155,6 @@ class TestDataset(Dataset):
         return len(self.data)
 
 
-# print(model(torch.tensor(tokenizer.encode("Testing the model", add_special_tokens=True)).unsqueeze(0)))
-
-# print(tokenizer.encode_plus(["Convorbiri", "literare", "."]))
-print(tokenizer.convert_tokens_to_ids("[PAD]"))
-print(tokenizer.convert_ids_to_tokens(10))
-
 train_dataset = MyDataset(X_train, y_train)
 validation_dataset = MyDataset(X_val, y_val)
 
@@ -228,9 +171,6 @@ validation_dataloader = DataLoader(
     dataset=validation_dataset,
     batch_size=BATCH_SIZE
 )
-
-# Some ideas were taken from here about the -100 crossEntropyLoss default ignored index so we made the padding/other tokens -100
-# https://colab.research.google.com/github/NielsRogge/Transformers-Tutorials/blob/master/BERT/Custom_Named_Entity_Recognition_with_BERT_only_first_wordpiece.ipynb#scrollTo=0jDNXrjr-6BW
 
 def train_epoch(model, train_dataloader, loss_crt, optimizer, device):
     model.train()
@@ -346,13 +286,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # move the model to GPU (when available)
 model.to(device)
 
-# create a SGD optimizer
+# create a AdamW optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.00001)
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=1, threshold=1e-2, verbose=True)
-# optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
-#
-# scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=1, threshold=1e-3, verbose=True)
 
 # set up loss function
 loss_criterion = nn.CrossEntropyLoss(weight=torch.as_tensor(weights, dtype=torch.float).to(device), ignore_index=-100, reduction="mean")
@@ -373,125 +310,6 @@ for epoch in range(1, EPOCHS+1):
     print('train loss: %10.8f, accuracy: %10.8f'%(train_loss, train_accuracy))
     print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
 
-# ! nvidia-smi
 
 model.save_pretrained(MODEL_NAME)
-torch.save(model.state_dict(), MODEL_NAME)
-
-# model.load_state_dict(torch.load("model_SGD_64_2.pt"))
-
-# model.from_pretrained("model_pretrained_SGD_64_2")
-
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-#
-# # move the model to GPU (when available)
-# model.to(device)
-#
-# # create a SGD optimizer
-# optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-# set up loss function
-# loss_criterion = nn.CrossEntropyLoss()
-# val_loss, val_accuracy, pepega_pepega_labels = eval_epoch(model, validation_dataloader, loss_criterion, device)
-# print(val_accuracy)
-
-
-"""
-def read_test(dataset, tokenizer):
-    data = []
-    max_length = 0
-    counter = 0
-    reshaped_dataset = []
-    # reshaped_length = 4
-    # for item in dataset:
-    #     for i in range(0, len(item['tokens']), reshaped_length):
-    #         reshaped_dataset.append(item['tokens'][i: min(i + reshaped_length, len(item['tokens']) ) ] )
-
-    for item in dataset:
-        reshaped_dataset.append(item['tokens'])
-
-    for item in reshaped_dataset:
-        # counter += len(item)
-        prelucrate_item = []
-        for token in item:
-            prelucrate_item.append(re.sub(r"\W+", 'or', token))
-        # print(prelucrate_item)
-        sequence = tokenizer(
-            prelucrate_item,
-            is_split_into_words=True,
-            padding="max_length",
-            max_length=MAX_LENGTH,
-            # truncation=True,
-            return_offsets_mapping=True
-        )
-        # sequence = tokenizer.encode(
-        #     prelucrate_item,
-        #     is_pretokenized=True,
-        # )
-        sequence = {key: torch.as_tensor(value) for key, value in sequence.items()}
-        data.append(sequence)
-
-    #     if len(sequence['input_ids']) > max_length:
-    #         print(tokenizer.convert_ids_to_tokens(sequence['input_ids']))
-    #         print((sequence['offset_mapping']))
-    #         print(item)
-    #     max_length = max(len(sequence['input_ids']), max_length)
-    # print(max_length)
-    return data
-
-reshaped_test_data = read_test(raw_test_data, tokenizer=tokenizer)
-
-test_dataloader = DataLoader(
-    dataset=reshaped_test_data,
-    batch_size=BATCH_SIZE
-)
-
-def test_epoch(model, test_dataloader, device):
-    model.eval()
-    epoch_loss = 0.0
-    num_batches = len(test_dataloader)
-    predictions = []
-    with torch.no_grad():
-        for idx, batch in tqdm(enumerate(test_dataloader)):
-            batch_data = batch
-            sequence_ids = batch_data['input_ids'].to(device)
-            sequence_masks = batch_data['attention_mask'].to(device)
-            offset_mapping = batch_data['offset_mapping']
-
-            raw_output = model(sequence_ids, attention_mask=sequence_masks)
-            output =  raw_output['logits']
-            logits = output.view(-1, model.num_labels)
-            batch_predictions = torch.argmax(logits, dim=1)
-            print(batch_predictions)
-
-
-            filtered_predictions = []
-
-            # raw_batch_predictions = torch.argmax(output, dim=2)
-            # # print(offset_mapping.shape)
-            # for index_bt, bt in enumerate(offset_mapping):
-            #     for index, offset in enumerate(bt):
-            #         if offset[0] == 0 and offset[1] != 0:
-            #             filtered_predictions.append(raw_batch_predictions[index_bt][index])
-
-            for index, offset in enumerate(offset_mapping.view(-1, 2)):
-                if offset[0] == 0 and offset[1] != 0:
-                    filtered_predictions.append(batch_predictions[index])
-
-            predictions += filtered_predictions
-
-    return predictions
-
-all_predictions = test_epoch(model, test_dataloader, device)
-print(len(all_predictions))
-
-# print(all_predictions)
-
-g = open("adam_sample_128_16_god_seed_v4.csv", "w")
-idx = 0
-g.write("Id,ner_label\n")
-for pred in all_predictions:
-    g.write(str(idx) + "," + str(pred.item()) + "\n")
-    idx += 1
-g.close()
-"""
+torch.save(model.state_dict(), MODEL_NAME + ".pt")
