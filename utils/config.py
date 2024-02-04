@@ -11,5 +11,8 @@ class Config():
         self.MODEL_NAME = "laptop_bert_uncased_v4"
         self.LEARNING_RATE = 2e-5
         self.DATA_PATH = 'data/laptop14'
+        self.SAVE_PATH = './experiments'
+        self.SAVE_FILES = ['models', 'utils', 'train.py', 'train.sh']
+        self.SMALL_POSITIVE_CONST = 1e-4
 
 CFG = Config()

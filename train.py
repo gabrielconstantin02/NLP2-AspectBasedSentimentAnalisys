@@ -7,11 +7,11 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, BertConfig, AutoModelForTokenClassification
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import f1_score, classification_report
 import numpy as np
 
 from utils.dataset import ABSADataset
-from utils.general import freeze_model, calculate_weights, plot_basic
+from utils.general import freeze_model, calculate_weights, plot_basic, get_next_name, save_setup
 from models.heads import BertABSATagger
 
 from utils.config import CFG
@@ -50,7 +50,7 @@ def train_epoch(model, train_dataloader, loss_crt, optimizer, device):
         labels += filtered_labels.squeeze().tolist()
         predictions += filtered_predictions.tolist()
 
-        batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy())
+        batch_acc = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='micro')
         epoch_acc += batch_acc
 
         loss_scalar = loss.item()
@@ -99,7 +99,7 @@ def eval_epoch(model, val_dataloader, loss_crt, device):
             labels += filtered_labels.squeeze().tolist()
             predictions += filtered_predictions.tolist()
 
-            batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy())
+            batch_acc = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='micro')
             epoch_acc += batch_acc
 
             loss_scalar = loss.item()
@@ -145,13 +145,13 @@ def train(model, train_dataloader, val_dataloader, weights):
 
         print('train loss: %10.8f, accuracy: %10.8f'%(train_loss, train_accuracy))
         print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
+        print(classification_report(val_labels_ep, val_pred_ep))
 
         if val_accuracy > best_val_acc and val_accuracy > 0.5:
             best_val_acc = val_accuracy
             best_model = model
             torch.save(model.state_dict(), os.path.join(CFG.SAVE_PATH, f'model_ep_{epoch}_{val_accuracy}.pt'))
             val_pred, val_labels = val_pred_ep, val_labels_ep
-            print(classification_report(val_labels_ep, val_pred_ep))
 
     plot_basic(train_losses, train_accuracies, val_losses, val_accuracies, val_pred, val_labels)
 
@@ -174,6 +174,10 @@ def get_cmd_args():
 if __name__ == "__main__":
     args = get_cmd_args()
 
+    CFG.SAVE_PATH = get_next_name(CFG.SAVE_PATH)
+    os.makedirs(CFG.SAVE_PATH, exist_ok=True) 
+
+    save_setup(CFG.SAVE_PATH, CFG.SAVE_FILES, args)
     # prepare the data
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
 

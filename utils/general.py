@@ -1,5 +1,7 @@
 import re
 import os
+import json
+import shutil
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 import seaborn as sns
@@ -43,7 +45,7 @@ def plot_basic(train_losses, train_accuracies, val_losses, val_accuracies, val_p
     ###### plotting the confusion matrix
     # creating the confusion matrix
     val_confusion_matrix = confusion_matrix(val_labels_ep, val_pred_ep)
-    val_confusion_matrix_df = pd.DataFrame(val_confusion_matrix, range(CFG.NUM_LABELS), range(CFG.NUM))
+    val_confusion_matrix_df = pd.DataFrame(val_confusion_matrix, range(CFG.NUM_LABELS), range(CFG.NUM_LABELS))
     # settings for the plot
     sns.set(font_scale=0.8)
     sns.set(rc={'figure.figsize':(18,16)})
@@ -123,3 +125,124 @@ def calculate_weights(labels, mode='sklearn'):
         for index in range(len(weights)):
             weights[index] = max_weight / weights[index]
     return weights
+
+def get_next_name(path):
+    """
+    This gets the next path to save a train as.
+    It is made in a incremental way.
+    """
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
+    all_paths = [d for d in os.listdir(path) if os.path.isdir(os.path.join(path, d)) and d.startswith("train")]
+
+    all_paths_numbers = [int(train[len("train"):]) for train in all_paths]
+    if len(all_paths_numbers) == 0:
+        next_number = 1
+    else:
+        next_number = max(all_paths_numbers) + 1
+
+    new_path = os.path.join(path, f'train{next_number:03d}')
+
+    return new_path
+
+
+def save_setup(path, files, args):
+    """
+    This function saves the current setup of the train in the train subfolder
+    Main purpose is full reproductibility of each model
+    """
+    final_path = os.path.join(path, "setup")
+    try:
+        os.mkdir(final_path)
+    except:
+        raise Exception(f"The following path shouldn't exist: {final_path}")
+    with open(os.path.join(final_path, "parse_args.json"), 'w') as file:
+        json.dump(vars(args), file, indent=4)
+    for file in files:
+        file_path = os.path.join('./', file)
+        dest_path = os.path.join(final_path, file)
+        if os.path.isdir(file_path):
+            shutil.copytree(file_path, dest_path)
+        else:
+            shutil.copy2(file_path, dest_path)
+    
+
+def compute_metrics_absa(preds, labels, all_evaluate_label_ids, tagging_schema):
+    if tagging_schema == 'BIEOS':
+        absa_label_vocab = {'O': 0, 'EQ': 1, 'B-POS': 2, 'I-POS': 3, 'E-POS': 4, 'S-POS': 5,
+                        'B-NEG': 6, 'I-NEG': 7, 'E-NEG': 8, 'S-NEG': 9,
+                        'B-NEU': 10, 'I-NEU': 11, 'E-NEU': 12, 'S-NEU': 13}
+    elif tagging_schema == 'BIO':
+        absa_label_vocab = {'O': 0, 'EQ': 1, 'B-POS': 2, 'I-POS': 3, 
+        'B-NEG': 4, 'I-NEG': 5, 'B-NEU': 6, 'I-NEU': 7}
+    elif tagging_schema == 'OT':
+        absa_label_vocab = {'O': 0, 'EQ': 1, 'T-POS': 2, 'T-NEG': 3, 'T-NEU': 4}
+    else:
+        raise Exception("Invalid tagging schema %s..." % tagging_schema)
+    absa_id2tag = {}
+    for k in absa_label_vocab:
+        v = absa_label_vocab[k]
+        absa_id2tag[v] = k
+    # number of true postive, gold standard, predicted targeted sentiment
+    n_tp_ts, n_gold_ts, n_pred_ts = np.zeros(3), np.zeros(3), np.zeros(3)
+    # precision, recall and f1 for aspect-based sentiment analysis
+    ts_precision, ts_recall, ts_f1 = np.zeros(3), np.zeros(3), np.zeros(3)
+    n_samples = len(all_evaluate_label_ids)
+    pred_y, gold_y = [], []
+    class_count = np.zeros(3)
+    for i in range(n_samples):
+        evaluate_label_ids = all_evaluate_label_ids[i]
+        pred_labels = preds[i][evaluate_label_ids]
+        gold_labels = labels[i][evaluate_label_ids]
+        assert len(pred_labels) == len(gold_labels)
+        # here, no EQ tag will be induced
+        pred_tags = [absa_id2tag[label] for label in pred_labels]
+        gold_tags = [absa_id2tag[label] for label in gold_labels]
+
+        if tagging_schema == 'OT':
+            gold_tags = ot2bieos_ts(gold_tags)
+            pred_tags = ot2bieos_ts(pred_tags)
+        elif tagging_schema == 'BIO':
+            gold_tags = ot2bieos_ts(bio2ot_ts(gold_tags))
+            pred_tags = ot2bieos_ts(bio2ot_ts(pred_tags))
+        else:
+            # current tagging schema is BIEOS, do nothing
+            pass
+        g_ts_sequence, p_ts_sequence = tag2ts(ts_tag_sequence=gold_tags), tag2ts(ts_tag_sequence=pred_tags)
+
+        hit_ts_count, gold_ts_count, pred_ts_count = match_ts(gold_ts_sequence=g_ts_sequence,
+                                                              pred_ts_sequence=p_ts_sequence)
+        n_tp_ts += hit_ts_count
+        n_gold_ts += gold_ts_count
+        n_pred_ts += pred_ts_count
+        for (b, e, s) in g_ts_sequence:
+            if s == 'POS':
+                class_count[0] += 1
+            if s == 'NEG':
+                class_count[1] += 1
+            if s == 'NEU':
+                class_count[2] += 1
+    for i in range(3):
+        n_ts = n_tp_ts[i]
+        n_g_ts = n_gold_ts[i]
+        n_p_ts = n_pred_ts[i]
+        ts_precision[i] = float(n_ts) / float(n_p_ts + CFG.SMALL_POSITIVE_CONST)
+        ts_recall[i] = float(n_ts) / float(n_g_ts + CFG.SMALL_POSITIVE_CONST)
+        ts_f1[i] = 2 * ts_precision[i] * ts_recall[i] / (ts_precision[i] + ts_recall[i] + CFG.SMALL_POSITIVE_CONST)
+
+    macro_f1 = ts_f1.mean()
+
+    # calculate micro-average scores for ts task
+    # TP
+    n_tp_total = sum(n_tp_ts)
+    # TP + FN
+    n_g_total = sum(n_gold_ts)
+    print("class_count:", class_count)
+
+    # TP + FP
+    n_p_total = sum(n_pred_ts)
+    micro_p = float(n_tp_total) / (n_p_total + CFG.SMALL_POSITIVE_CONST)
+    micro_r = float(n_tp_total) / (n_g_total + CFG.SMALL_POSITIVE_CONST)
+    micro_f1 = 2 * micro_p * micro_r / (micro_p + micro_r + CFG.SMALL_POSITIVE_CONST)
+    scores = {'macro-f1': macro_f1, 'precision': micro_p, "recall": micro_r, "micro-f1": micro_f1}
+    return scores
