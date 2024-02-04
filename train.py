@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score, classification_report
 import numpy as np
 
 from utils.dataset import ABSADataset
-from utils.general import freeze_model, calculate_weights
+from utils.general import freeze_model, calculate_weights, plot_basic
 from models.heads import BertABSATagger
 
 from utils.config import CFG
@@ -91,6 +91,7 @@ def eval_epoch(model, val_dataloader, loss_crt, device):
             batch_predictions = torch.argmax(logits, dim=1)
 
             proper_labels = batch_labels.view(-1) != -100
+            loss = loss_crt(logits, batch_labels.view(-1))
 
             filtered_labels = torch.masked_select(batch_labels.view(-1), proper_labels)
             filtered_predictions = torch.masked_select(batch_predictions, proper_labels)
@@ -108,8 +109,7 @@ def eval_epoch(model, val_dataloader, loss_crt, device):
     epoch_loss = epoch_loss/num_batches
     epoch_acc = epoch_acc/num_batches
 
-    print(classification_report(labels, predictions))
-    return epoch_loss, epoch_acc
+    return epoch_loss, epoch_acc, predictions, labels
 
 def train(model, train_dataloader, val_dataloader, weights):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -118,31 +118,42 @@ def train(model, train_dataloader, val_dataloader, weights):
     model.to(device)
 
     # create a AdamW optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.00001)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=CFG.LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=1, threshold=1e-2, verbose=True)
+
 
     # set up loss function
     loss_criterion = nn.CrossEntropyLoss(weight=torch.as_tensor(weights, dtype=torch.float).to(device), ignore_index=-100, reduction="mean")
 
+    best_val_acc = 0.0
+    best_model = model
     train_losses = []
     train_accuracies = []
     val_losses = []
     val_accuracies = []
     for epoch in range(1, CFG.EPOCHS+1):
         print('\nEpoch %d'%(epoch))
+
         train_loss, train_accuracy = train_epoch(model, train_dataloader, loss_criterion, optimizer, device)
-        val_loss, val_accuracy = eval_epoch(model, val_dataloader, loss_criterion, device)
+        val_loss, val_accuracy, val_pred_ep, val_labels_ep = eval_epoch(model, val_dataloader, loss_criterion, device)
         scheduler.step(val_loss)
+
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         train_accuracies.append(train_accuracy)
         val_accuracies.append(val_accuracy)
+
         print('train loss: %10.8f, accuracy: %10.8f'%(train_loss, train_accuracy))
         print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
 
+        if val_accuracy > best_val_acc and val_accuracy > 0.5:
+            best_val_acc = val_accuracy
+            best_model = model
+            torch.save(model.state_dict(), os.path.join(CFG.SAVE_PATH, f'model_ep_{epoch}_{val_accuracy}.pt'))
+            val_pred, val_labels = val_pred_ep, val_labels_ep
+            print(classification_report(val_labels_ep, val_pred_ep))
 
-    model.save_pretrained(CFG.MODEL_NAME)
-    torch.save(model.state_dict(), CFG.MODEL_NAME + ".pt")
+    plot_basic(train_losses, train_accuracies, val_losses, val_accuracies, val_pred, val_labels)
 
 def get_cmd_args():
     global CFG

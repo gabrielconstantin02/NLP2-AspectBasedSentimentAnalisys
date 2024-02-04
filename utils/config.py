@@ -4,9 +4,12 @@ class Config():
         self.SEED = 8
         self.MAX_LENGTH = 128
         self.EPOCHS = 10
-        self.BATCH_SIZE = 16
+        self.NUM_LABELS = 4
+        self.BATCH_SIZE = 25 # 1500 steps as 25 bs => 14 epochs on laptop
+        # self.BATCH_SIZE = 16 # 1500 steps as 16 bs => 9 epochs on rest 
         self.NUM_LAYERS_FROZEN = 8
         self.MODEL_NAME = "laptop_bert_uncased_v4"
+        self.LEARNING_RATE = 2e-5
         self.DATA_PATH = 'data/laptop14'
 
 CFG = Config()
