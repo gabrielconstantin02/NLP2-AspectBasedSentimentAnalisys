@@ -20,7 +20,6 @@ class ABSADataset(Dataset):
                 truncation=True,
                 max_length=max_length,
                 return_offsets_mapping=True
-
             )
             sequence = {key: torch.as_tensor(value) for key, value in sequence.items()}
             data.append(sequence)

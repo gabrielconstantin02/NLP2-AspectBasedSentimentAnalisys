@@ -6,7 +6,6 @@ import numpy as np
 
 def logsumexp(tensor, dim=-1, keepdim=False):
     """
-
     :param tensor:
     :param dim:
     :param keepdim:

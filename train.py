@@ -1,29 +1,26 @@
 from tqdm import tqdm
 import os
 import random
+import argparse
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenClassification
+from transformers import AutoTokenizer, BertConfig, AutoModelForTokenClassification
 from sklearn.metrics import accuracy_score, classification_report
 import numpy as np
 
 from utils.dataset import ABSADataset
 from utils.general import freeze_model, calculate_weights
+from models.heads import BertABSATagger
 
-seed = 8
-MAX_LENGTH = 128
-EPOCHS = 10
-BATCH_SIZE = 16
-NUM_LAYERS_FROZEN = 8
-MODEL_NAME = "laptop_bert_uncased_v4"
-DATA_PATH = 'data/laptop14'
+from utils.config import CFG
 
-np.random.seed(seed)
-np.random.RandomState(seed)
-random.seed(seed)
-torch.manual_seed(seed)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+np.random.seed(CFG.SEED)
+np.random.RandomState(CFG.SEED)
+random.seed(CFG.SEED)
+torch.manual_seed(CFG.SEED)
 
 
 def train_epoch(model, train_dataloader, loss_crt, optimizer, device):
@@ -57,10 +54,6 @@ def train_epoch(model, train_dataloader, loss_crt, optimizer, device):
         epoch_acc += batch_acc
 
         loss_scalar = loss.item()
-
-        if idx % 100 == 0:
-            print(epoch_acc/(idx + 1))
-            print(batch_predictions)
 
         torch.nn.utils.clip_grad_norm_(
             parameters=model.parameters(), max_norm=10
@@ -135,7 +128,7 @@ def train(model, train_dataloader, val_dataloader, weights):
     train_accuracies = []
     val_losses = []
     val_accuracies = []
-    for epoch in range(1, EPOCHS+1):
+    for epoch in range(1, CFG.EPOCHS+1):
         print('\nEpoch %d'%(epoch))
         train_loss, train_accuracy = train_epoch(model, train_dataloader, loss_criterion, optimizer, device)
         val_loss, val_accuracy = eval_epoch(model, val_dataloader, loss_criterion, device)
@@ -148,29 +141,59 @@ def train(model, train_dataloader, val_dataloader, weights):
         print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
 
 
-    model.save_pretrained(MODEL_NAME)
-    torch.save(model.state_dict(), MODEL_NAME + ".pt")
+    model.save_pretrained(CFG.MODEL_NAME)
+    torch.save(model.state_dict(), CFG.MODEL_NAME + ".pt")
+
+def get_cmd_args():
+    global CFG
+    parser = argparse.ArgumentParser(description='Python script that trains a CNN model on generated images.')
+    parser.add_argument('--model_name', type=str, help='Model to be used', default="BERT", \
+                        choices=['BERT', "ABSA_BERT"])
+    parser.add_argument('--absa_type', type=str, help='Type of head to be used', default="linear", \
+                        choices=['linear', "lstm", 'gru', 'tfm', 'san', 'crf'])
+    parser.add_argument('--fix_tfm', type=str, help="Whether to freeze the whole model or partial or none", default="partial", \
+                        choices=['full', "partial", "none"])
+    parser.add_argument('--num_epochs', type=int, help='Number of epochs to train', default="20")
+
+    args = parser.parse_args()
+
+    CFG.EPOCHS = args.num_epochs
+    return args
 
 if __name__ == "__main__":
+    args = get_cmd_args()
+
     # prepare the data
     tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
 
-    train_dataset = ABSADataset(os.path.join(DATA_PATH, 'train.txt'), tokenizer, max_length=MAX_LENGTH)
-    validation_dataset = ABSADataset(os.path.join(DATA_PATH, 'test.txt'), tokenizer, max_length=MAX_LENGTH)
+    train_dataset = ABSADataset(os.path.join(CFG.DATA_PATH, 'train.txt'), tokenizer, max_length=CFG.MAX_LENGTH)
+    validation_dataset = ABSADataset(os.path.join(CFG.DATA_PATH, 'test.txt'), tokenizer, max_length=CFG.MAX_LENGTH)
 
     dataset_weights = calculate_weights(train_dataset.labels, 'sklearn')
 
     train_dataloader = DataLoader(
         dataset=train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=CFG.BATCH_SIZE,
         shuffle=True
     )
     validation_dataloader = DataLoader(
         dataset=validation_dataset,
-        batch_size=BATCH_SIZE
+        batch_size=CFG.BATCH_SIZE
     )
     # prepare the model
-    model = AutoModelForTokenClassification.from_pretrained('bert-base-uncased', num_labels=4) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
-    freeze_model(model, NUM_LAYERS_FROZEN)
+    if args.model_name == "BERT":
+        model = AutoModelForTokenClassification.from_pretrained('bert-base-uncased', num_labels=4) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
+        freeze_model(model, CFG.NUM_LAYERS_FROZEN)
+    else:
+        config = BertConfig.from_pretrained('bert-base-uncased', num_labels=4)
+        config.absa_type = args.absa_type
+        config.fix_tfm = args.fix_tfm
+        model = BertABSATagger('bert-base-uncased', config)
+        # fix the parameters in BERT and regard it as feature extractor
+        if config.fix_tfm == "full":
+            freeze_model(model, config.num_hidden_layers)
+        elif config.fix_tfm == "partial":
+            freeze_model(model, CFG.NUM_LAYERS_FROZEN)
+
 
     train(model, train_dataloader, validation_dataloader, dataset_weights)

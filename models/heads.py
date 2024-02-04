@@ -1,8 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-from transformers import BertModel, XLNetModel
-from bert import BertPreTrainedModel, XLNetPreTrainedModel
+from transformers import BertModel
 
 from utils.seq import *
 
@@ -378,28 +377,17 @@ class LSTM(nn.Module):
         return h_0, c_0
 
 
-class BertABSATagger(BertPreTrainedModel):
-    def __init__(self, bert_config):
+class BertABSATagger(nn.Module):
+    def __init__(self, pretrained_model, bert_config):
         """
-
         :param bert_config: configuration for bert model
         """
-        super(BertABSATagger, self).__init__(bert_config)
+        super(BertABSATagger, self).__init__()
         self.num_labels = bert_config.num_labels
         self.tagger_config = TaggerConfig()
         self.tagger_config.absa_type = bert_config.absa_type.lower()
-        if bert_config.tfm_mode == 'finetune':
-            # initialized with pre-trained BERT and perform finetuning
-            # print("Fine-tuning the pre-trained BERT...")
-            self.bert = BertModel(bert_config)
-        else:
-            raise Exception("Invalid transformer mode %s!!!" % bert_config.tfm_mode)
+        self.bert = BertModel.from_pretrained(pretrained_model)
         self.bert_dropout = nn.Dropout(bert_config.hidden_dropout_prob)
-        # fix the parameters in BERT and regard it as feature extractor
-        if bert_config.fix_tfm:
-            # fix the parameters of the (pre-trained or randomly initialized) transformers during fine-tuning
-            for p in self.bert.parameters():
-                p.requires_grad = False
 
         self.tagger = None
         if self.tagger_config.absa_type == 'linear':
@@ -471,9 +459,9 @@ class BertABSATagger(BertPreTrainedModel):
                     loss = loss_fct(active_logits, active_labels)
                 else:
                     loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-                outputs = (loss,) + outputs
+                outputs = {'loss': loss,  'logits': outputs[0]}
             else:
                 log_likelihood = self.tagger(inputs=logits, tags=labels, mask=attention_mask)
                 loss = -log_likelihood
-                outputs = (loss,) + outputs
+                outputs = {'loss': loss,  'logits': outputs[0]}
         return outputs
