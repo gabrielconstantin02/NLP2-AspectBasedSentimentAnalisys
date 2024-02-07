@@ -56,27 +56,40 @@ def plot_basic(train_losses, train_accuracies, val_losses, val_accuracies, val_p
     plt.savefig(os.path.join(CFG.SAVE_PATH, "model_confusion_matrix.png"))
     plt.close()
 
-def parse_input_file(filepath):
-    label_mapper = {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
-    with open(filepath) as f:
-        dataset = []
-        for line in f:
-            item = {
-                'tokens': [],
-                'labels': []
-            }
-            _, token_label_pairs = line.strip().split("####")
-            for token_label in token_label_pairs.split(" "):
-                # print(token_label)
-                token_label_split = token_label.split("=")
-                if len(token_label_split) == 2:
-                    token, label = token_label.split("=")
-                else:
-                    token = ''.join((len(token_label) - 2) * ['='])
-                    label = token_label[-1]
-                item['tokens'].extend([token])
-                item['labels'].extend([label_mapper[label]])
-            dataset.append(item)
+def parse_input_file(filepaths):
+    label_mapper = CFG.LABELS_MAPPING
+    if os.path.exists(filepaths):
+        filepaths = [filepaths]
+    else:
+        filepath = filepaths.split('/')
+        keyword = filepath[-2]
+        file_type = filepath[-1]
+        filepath = '/'.join(filepath[:-2])
+        filepaths = []
+        for path in os.listdir(filepath):
+            if keyword in path.split('/')[-1]:
+                filepaths.append(os.path.join(os.path.join(filepath, path), file_type))
+    
+    dataset = []
+    for filepath in filepaths:
+        with open(filepath) as f:
+            for line in f:
+                item = {
+                    'tokens': [],
+                    'labels': []
+                }
+                _, token_label_pairs = line.strip().split("####")
+                for token_label in token_label_pairs.split(" "):
+                    # print(token_label)
+                    token_label_split = token_label.split("=")
+                    if len(token_label_split) == 2:
+                        token, label = token_label.split("=")
+                    else:
+                        token = ''.join((len(token_label) - 2) * ['='])
+                        label = token_label[-1]
+                    item['tokens'].extend([token])
+                    item['labels'].extend([label_mapper[label]])
+                dataset.append(item)
 
     return dataset
     
@@ -166,19 +179,113 @@ def save_setup(path, files, args):
         else:
             shutil.copy2(file_path, dest_path)
     
+# TODO: translate this to work with our setup
+def ot2bieos_ts(ts_tag_sequence):
+    """
+    ot2bieos function for targeted-sentiment task, ts refers to targeted -sentiment / aspect-based sentiment
+    :param ts_tag_sequence: tag sequence for targeted sentiment
+    :return:
+    """
+    n_tags = len(ts_tag_sequence)
+    new_ts_sequence = []
+    prev_pos = '$$$'
+    for i in range(n_tags):
+        cur_ts_tag = ts_tag_sequence[i]
+        if cur_ts_tag == 'O' or cur_ts_tag == 'EQ':
+            # when meet the EQ label, regard it as O label
+            new_ts_sequence.append('O')
+            cur_pos = 'O'
+        else:
+            cur_pos, cur_sentiment = cur_ts_tag.split('-')
+            # cur_pos is T
+            if cur_pos != prev_pos:
+                # prev_pos is O and new_cur_pos can only be B or S
+                if i == n_tags - 1:
+                    new_ts_sequence.append('S-%s' % cur_sentiment)
+                else:
+                    next_ts_tag = ts_tag_sequence[i + 1]
+                    if next_ts_tag == 'O':
+                        new_ts_sequence.append('S-%s' % cur_sentiment)
+                    else:
+                        new_ts_sequence.append('B-%s' % cur_sentiment)
+            else:
+                # prev_pos is T and new_cur_pos can only be I or E
+                if i == n_tags - 1:
+                    new_ts_sequence.append('E-%s' % cur_sentiment)
+                else:
+                    next_ts_tag = ts_tag_sequence[i + 1]
+                    if next_ts_tag == 'O':
+                        new_ts_sequence.append('E-%s' % cur_sentiment)
+                    else:
+                        new_ts_sequence.append('I-%s' % cur_sentiment)
+        prev_pos = cur_pos
+    return new_ts_sequence
 
-def compute_metrics_absa(preds, labels, all_evaluate_label_ids, tagging_schema):
-    if tagging_schema == 'BIEOS':
-        absa_label_vocab = {'O': 0, 'EQ': 1, 'B-POS': 2, 'I-POS': 3, 'E-POS': 4, 'S-POS': 5,
-                        'B-NEG': 6, 'I-NEG': 7, 'E-NEG': 8, 'S-NEG': 9,
-                        'B-NEU': 10, 'I-NEU': 11, 'E-NEU': 12, 'S-NEU': 13}
-    elif tagging_schema == 'BIO':
-        absa_label_vocab = {'O': 0, 'EQ': 1, 'B-POS': 2, 'I-POS': 3, 
-        'B-NEG': 4, 'I-NEG': 5, 'B-NEU': 6, 'I-NEU': 7}
-    elif tagging_schema == 'OT':
-        absa_label_vocab = {'O': 0, 'EQ': 1, 'T-POS': 2, 'T-NEG': 3, 'T-NEU': 4}
-    else:
-        raise Exception("Invalid tagging schema %s..." % tagging_schema)
+def tag2ts(ts_tag_sequence):
+    """
+    transform ts tag sequence to targeted sentiment
+    :param ts_tag_sequence: tag sequence for ts task
+    :return:
+    """
+    n_tags = len(ts_tag_sequence)
+    ts_sequence, sentiments = [], []
+    beg, end = -1, -1
+    for i in range(n_tags):
+        ts_tag = ts_tag_sequence[i]
+        # current position and sentiment
+        # tag O and tag EQ will not be counted
+        eles = ts_tag.split('-')
+        if len(eles) == 2:
+            pos, sentiment = eles
+        else:
+            pos, sentiment = 'O', 'O'
+        if sentiment != 'O':
+            # current word is a subjective word
+            sentiments.append(sentiment)
+        if pos == 'S':
+            # singleton
+            ts_sequence.append((i, i, sentiment))
+            sentiments = []
+        elif pos == 'B':
+            beg = i
+            if len(sentiments) > 1:
+                # remove the effect of the noisy I-{POS,NEG,NEU}
+                sentiments = [sentiments[-1]]
+        elif pos == 'E':
+            end = i
+            # schema1: only the consistent sentiment tags are accepted
+            # that is, all of the sentiment tags are the same
+            if end > beg > -1 and len(set(sentiments)) == 1:
+                ts_sequence.append((beg, end, sentiment))
+                sentiments = []
+                beg, end = -1, -1
+    return ts_sequence
+
+def match_ts(gold_ts_sequence, pred_ts_sequence):
+    """
+    calculate the number of correctly predicted targeted sentiment
+    :param gold_ts_sequence: gold standard targeted sentiment sequence
+    :param pred_ts_sequence: predicted targeted sentiment sequence
+    :return:
+    """
+    # positive, negative and neutral
+    tag2tagid = {'POS': 0, 'NEG': 1, 'NEU': 2}
+    hit_count, gold_count, pred_count = np.zeros(3), np.zeros(3), np.zeros(3)
+    for t in gold_ts_sequence:
+        #print(t)
+        ts_tag = t[2]
+        tid = tag2tagid[ts_tag]
+        gold_count[tid] += 1
+    for t in pred_ts_sequence:
+        ts_tag = t[2]
+        tid = tag2tagid[ts_tag]
+        if t in gold_ts_sequence:
+            hit_count[tid] += 1
+        pred_count[tid] += 1
+    return hit_count, gold_count, pred_count
+
+def compute_metrics_absa(preds, labels):
+    absa_label_vocab = CFG.LABELS_MAPPING
     absa_id2tag = {}
     for k in absa_label_vocab:
         v = absa_label_vocab[k]
@@ -187,41 +294,30 @@ def compute_metrics_absa(preds, labels, all_evaluate_label_ids, tagging_schema):
     n_tp_ts, n_gold_ts, n_pred_ts = np.zeros(3), np.zeros(3), np.zeros(3)
     # precision, recall and f1 for aspect-based sentiment analysis
     ts_precision, ts_recall, ts_f1 = np.zeros(3), np.zeros(3), np.zeros(3)
-    n_samples = len(all_evaluate_label_ids)
-    pred_y, gold_y = [], []
     class_count = np.zeros(3)
-    for i in range(n_samples):
-        evaluate_label_ids = all_evaluate_label_ids[i]
-        pred_labels = preds[i][evaluate_label_ids]
-        gold_labels = labels[i][evaluate_label_ids]
-        assert len(pred_labels) == len(gold_labels)
-        # here, no EQ tag will be induced
-        pred_tags = [absa_id2tag[label] for label in pred_labels]
-        gold_tags = [absa_id2tag[label] for label in gold_labels]
+    pred_labels = preds
+    gold_labels = labels
+    assert len(pred_labels) == len(gold_labels)
+    # here, no EQ tag will be induced
+    pred_tags = [absa_id2tag[label] for label in pred_labels]
+    gold_tags = [absa_id2tag[label] for label in gold_labels]
 
-        if tagging_schema == 'OT':
-            gold_tags = ot2bieos_ts(gold_tags)
-            pred_tags = ot2bieos_ts(pred_tags)
-        elif tagging_schema == 'BIO':
-            gold_tags = ot2bieos_ts(bio2ot_ts(gold_tags))
-            pred_tags = ot2bieos_ts(bio2ot_ts(pred_tags))
-        else:
-            # current tagging schema is BIEOS, do nothing
-            pass
-        g_ts_sequence, p_ts_sequence = tag2ts(ts_tag_sequence=gold_tags), tag2ts(ts_tag_sequence=pred_tags)
+    gold_tags = ot2bieos_ts(gold_tags)
+    pred_tags = ot2bieos_ts(pred_tags)
+    g_ts_sequence, p_ts_sequence = tag2ts(ts_tag_sequence=gold_tags), tag2ts(ts_tag_sequence=pred_tags)
 
-        hit_ts_count, gold_ts_count, pred_ts_count = match_ts(gold_ts_sequence=g_ts_sequence,
-                                                              pred_ts_sequence=p_ts_sequence)
-        n_tp_ts += hit_ts_count
-        n_gold_ts += gold_ts_count
-        n_pred_ts += pred_ts_count
-        for (b, e, s) in g_ts_sequence:
-            if s == 'POS':
-                class_count[0] += 1
-            if s == 'NEG':
-                class_count[1] += 1
-            if s == 'NEU':
-                class_count[2] += 1
+    hit_ts_count, gold_ts_count, pred_ts_count = match_ts(gold_ts_sequence=g_ts_sequence,
+                                                            pred_ts_sequence=p_ts_sequence)
+    n_tp_ts += hit_ts_count
+    n_gold_ts += gold_ts_count
+    n_pred_ts += pred_ts_count
+    for (b, e, s) in g_ts_sequence:
+        if s == 'POS':
+            class_count[0] += 1
+        if s == 'NEG':
+            class_count[1] += 1
+        if s == 'NEU':
+            class_count[2] += 1
     for i in range(3):
         n_ts = n_tp_ts[i]
         n_g_ts = n_gold_ts[i]
@@ -237,12 +333,12 @@ def compute_metrics_absa(preds, labels, all_evaluate_label_ids, tagging_schema):
     n_tp_total = sum(n_tp_ts)
     # TP + FN
     n_g_total = sum(n_gold_ts)
-    print("class_count:", class_count)
+    # print("class_count:", class_count)
 
     # TP + FP
     n_p_total = sum(n_pred_ts)
     micro_p = float(n_tp_total) / (n_p_total + CFG.SMALL_POSITIVE_CONST)
     micro_r = float(n_tp_total) / (n_g_total + CFG.SMALL_POSITIVE_CONST)
     micro_f1 = 2 * micro_p * micro_r / (micro_p + micro_r + CFG.SMALL_POSITIVE_CONST)
-    scores = {'macro-f1': macro_f1, 'precision': micro_p, "recall": micro_r, "micro-f1": micro_f1}
+    scores = {'macro-f1': macro_f1, 'precision': micro_p, "recall": micro_r, "micro-f1": micro_f1, 'class_count': class_count}
     return scores

@@ -11,7 +11,7 @@ from sklearn.metrics import f1_score, classification_report
 import numpy as np
 
 from utils.dataset import ABSADataset
-from utils.general import freeze_model, calculate_weights, plot_basic, get_next_name, save_setup
+from utils.general import freeze_model, calculate_weights, plot_basic, get_next_name, save_setup, compute_metrics_absa
 from models.heads import BertABSATagger
 
 from utils.config import CFG
@@ -50,7 +50,7 @@ def train_epoch(model, train_dataloader, loss_crt, optimizer, device):
         labels += filtered_labels.squeeze().tolist()
         predictions += filtered_predictions.tolist()
 
-        batch_acc = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='micro')
+        batch_acc = compute_metrics_absa(filtered_predictions.cpu().numpy(), filtered_labels.cpu().numpy())['micro-f1']
         epoch_acc += batch_acc
 
         loss_scalar = loss.item()
@@ -99,7 +99,7 @@ def eval_epoch(model, val_dataloader, loss_crt, device):
             labels += filtered_labels.squeeze().tolist()
             predictions += filtered_predictions.tolist()
 
-            batch_acc = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='micro')
+            batch_acc = compute_metrics_absa(filtered_predictions.cpu().numpy(), filtered_labels.cpu().numpy())['micro-f1']
             epoch_acc += batch_acc
 
             loss_scalar = loss.item()
@@ -130,6 +130,7 @@ def train(model, train_dataloader, val_dataloader, weights):
     train_losses = []
     train_accuracies = []
     val_losses = []
+    val_pred, val_labels = None, None
     val_accuracies = []
     for epoch in range(1, CFG.EPOCHS+1):
         print('\nEpoch %d'%(epoch))
@@ -145,9 +146,12 @@ def train(model, train_dataloader, val_dataloader, weights):
 
         print('train loss: %10.8f, accuracy: %10.8f'%(train_loss, train_accuracy))
         print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
+        print("Classification report:")
         print(classification_report(val_labels_ep, val_pred_ep))
+        print("ABSA eval report:")
+        print(compute_metrics_absa(val_pred_ep, val_labels_ep))
 
-        if val_accuracy > best_val_acc and val_accuracy > 0.5:
+        if val_accuracy > best_val_acc:
             best_val_acc = val_accuracy
             best_model = model
             torch.save(model.state_dict(), os.path.join(CFG.SAVE_PATH, f'model_ep_{epoch}_{val_accuracy}.pt'))
@@ -165,10 +169,14 @@ def get_cmd_args():
     parser.add_argument('--fix_tfm', type=str, help="Whether to freeze the whole model or partial or none", default="partial", \
                         choices=['full', "partial", "none"])
     parser.add_argument('--num_epochs', type=int, help='Number of epochs to train', default="20")
-
+    parser.add_argument('--batch_size', type=int, help='Batch size', default="16")
+    parser.add_argument('--data_path', type=str, help="The dataset path", default="data/laptop14", \
+                        choices=['data/laptop14', "data/rest"])
     args = parser.parse_args()
 
     CFG.EPOCHS = args.num_epochs
+    CFG.DATA_PATH = args.data_path
+    CFG.BATCH_SIZE = args.batch_size
     return args
 
 if __name__ == "__main__":

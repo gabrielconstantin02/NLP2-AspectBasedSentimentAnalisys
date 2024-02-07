@@ -10,9 +10,10 @@ class Config():
         self.NUM_LAYERS_FROZEN = 8
         self.MODEL_NAME = "laptop_bert_uncased_v4"
         self.LEARNING_RATE = 2e-5
-        self.DATA_PATH = 'data/laptop14'
+        self.DATA_PATH = ''
         self.SAVE_PATH = './experiments'
         self.SAVE_FILES = ['models', 'utils', 'train.py', 'train.sh']
         self.SMALL_POSITIVE_CONST = 1e-4
+        self.LABELS_MAPPING = {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
 
 CFG = Config()
