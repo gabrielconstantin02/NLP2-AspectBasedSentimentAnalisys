@@ -187,6 +187,7 @@ def get_cmd_args():
     CFG.DATA_PATH = args.data_path
     CFG.BATCH_SIZE = args.batch_size
     CFG.TRANSFORMER_NAME = args.transformer_name
+    CFG.MODEL_NAME = args.model_name
     return args
 
 if __name__ == "__main__":

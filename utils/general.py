@@ -131,12 +131,20 @@ def fix_max_length(dataset, reshaped_length=110):
 
 
 def freeze_model(model, num_layers):
-    # Frozen the embedding layer and some of the encoders
-    for param in model.bert.embeddings.parameters():
-        param.requires_grad = False
-    for layer in model.bert.encoder.layer[:num_layers]:
-        for param in layer.parameters():
+    if CFG.TRANSFORMER_NAME == 'roberta-base' and CFG.MODEL_NAME == 'BERT':
+        # Frozen the embedding layer and some of the encoders
+        for param in model.roberta.embeddings.parameters():
             param.requires_grad = False
+        for layer in model.roberta.encoder.layer[:num_layers]:
+            for param in layer.parameters():
+                param.requires_grad = False
+    else:
+        # Frozen the embedding layer and some of the encoders
+        for param in model.bert.embeddings.parameters():
+            param.requires_grad = False
+        for layer in model.bert.encoder.layer[:num_layers]:
+            for param in layer.parameters():
+                param.requires_grad = False
 
 
 def pad(samples, max_length):
