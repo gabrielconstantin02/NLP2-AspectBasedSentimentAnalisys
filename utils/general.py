@@ -14,6 +14,30 @@ from sklearn.metrics import confusion_matrix
 
 from utils.config import CFG
 
+def plot_extra(accuracies_macro, accuracies_micro):
+    fig, axis = plt.subplots(1,2, figsize=(10,5))
+    epochs_list = range(CFG.EPOCHS)
+
+    # creating the 4 plots
+    import pdb; pdb.set_trace();
+    axis[0].plot(epochs_list, accuracies_macro)
+    axis[0].set_title("Val macro")
+    axis[1].plot(epochs_list, accuracies_micro)
+    axis[1].set_title("Val micro")
+
+    # asigning the label
+    for ax in axis.flat:
+        ax.set(xlabel='Epochs', ylabel='Accuracy')
+
+    # making the axis show only outer label
+    # for ax in axis.flat:
+    #     ax.label_outer()
+
+    # saving the figure
+    plt.savefig(os.path.join(CFG.SAVE_PATH, "model_plots_extra.png"))
+    plt.close()
+
+
 def plot_basic(train_losses, train_accuracies, val_losses, val_accuracies, val_pred_ep, val_labels_ep):
     fig, axis = plt.subplots(2,2, figsize=(10,10))
     epochs_list = range(CFG.EPOCHS)

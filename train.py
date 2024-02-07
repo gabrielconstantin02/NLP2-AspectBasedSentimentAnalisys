@@ -2,16 +2,17 @@ from tqdm import tqdm
 import os
 import random
 import argparse
+import json
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, BertConfig, AutoModelForTokenClassification
+from transformers import AutoTokenizer, BertConfig, AutoModelForTokenClassification, RobertaConfig
 from sklearn.metrics import f1_score, classification_report
 import numpy as np
 
 from utils.dataset import ABSADataset
-from utils.general import freeze_model, calculate_weights, plot_basic, get_next_name, save_setup, compute_metrics_absa
+from utils.general import freeze_model, calculate_weights, plot_basic, get_next_name, save_setup, compute_metrics_absa, plot_extra
 from models.heads import BertABSATagger
 
 from utils.config import CFG
@@ -132,6 +133,8 @@ def train(model, train_dataloader, val_dataloader, weights):
     val_losses = []
     val_pred, val_labels = None, None
     val_accuracies = []
+    accuracies_macro = []
+    accuracies_micro = []
     for epoch in range(1, CFG.EPOCHS+1):
         print('\nEpoch %d'%(epoch))
 
@@ -148,8 +151,11 @@ def train(model, train_dataloader, val_dataloader, weights):
         print('val loss: %10.8f, accuracy: %10.8f'%(val_loss, val_accuracy))
         print("Classification report:")
         print(classification_report(val_labels_ep, val_pred_ep))
+        absa_metrics = compute_metrics_absa(val_pred_ep, val_labels_ep)
         print("ABSA eval report:")
-        print(compute_metrics_absa(val_pred_ep, val_labels_ep))
+        print(absa_metrics)
+        accuracies_macro.append(f1_score(val_labels_ep, val_pred_ep, average='macro'))
+        accuracies_micro.append(absa_metrics['micro-f1'])
 
         if val_accuracy > best_val_acc:
             best_val_acc = val_accuracy
@@ -158,12 +164,15 @@ def train(model, train_dataloader, val_dataloader, weights):
             val_pred, val_labels = val_pred_ep, val_labels_ep
 
     plot_basic(train_losses, train_accuracies, val_losses, val_accuracies, val_pred, val_labels)
+    plot_extra(accuracies_macro, accuracies_micro)
 
 def get_cmd_args():
     global CFG
     parser = argparse.ArgumentParser(description='Python script that trains a CNN model on generated images.')
     parser.add_argument('--model_name', type=str, help='Model to be used', default="BERT", \
                         choices=['BERT', "ABSA_BERT"])
+    parser.add_argument('--transformer_name', type=str, help='Model to be used', default="bert-base-uncased", \
+                        choices=['bert-base-uncased', "roberta-base"])
     parser.add_argument('--absa_type', type=str, help='Type of head to be used', default="linear", \
                         choices=['linear', "lstm", 'gru', 'tfm', 'san', 'crf'])
     parser.add_argument('--fix_tfm', type=str, help="Whether to freeze the whole model or partial or none", default="partial", \
@@ -177,6 +186,7 @@ def get_cmd_args():
     CFG.EPOCHS = args.num_epochs
     CFG.DATA_PATH = args.data_path
     CFG.BATCH_SIZE = args.batch_size
+    CFG.TRANSFORMER_NAME = args.transformer_name
     return args
 
 if __name__ == "__main__":
@@ -205,13 +215,17 @@ if __name__ == "__main__":
     )
     # prepare the model
     if args.model_name == "BERT":
-        model = AutoModelForTokenClassification.from_pretrained('bert-base-uncased', num_labels=4) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
+        model = AutoModelForTokenClassification.from_pretrained(CFG.TRANSFORMER_NAME, num_labels=CFG.NUM_LABELS) # {'O': 0, 'T-POS': 1, 'T-NEG': 2, 'T-NEU': 3}
         freeze_model(model, CFG.NUM_LAYERS_FROZEN)
     else:
-        config = BertConfig.from_pretrained('bert-base-uncased', num_labels=4)
+        config = None
+        if CFG.TRANSFORMER_NAME == 'bert-base-uncased':
+            config = BertConfig.from_pretrained(CFG.TRANSFORMER_NAME, num_labels=CFG.NUM_LABELS)
+        else:
+            config = RobertaConfig.from_pretrained(CFG.TRANSFORMER_NAME, num_labels=CFG.NUM_LABELS)
         config.absa_type = args.absa_type
         config.fix_tfm = args.fix_tfm
-        model = BertABSATagger('bert-base-uncased', config)
+        model = BertABSATagger(CFG.TRANSFORMER_NAME, config)
         # fix the parameters in BERT and regard it as feature extractor
         if config.fix_tfm == "full":
             freeze_model(model, config.num_hidden_layers)

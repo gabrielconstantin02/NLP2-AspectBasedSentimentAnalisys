@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-from transformers import BertModel
+from transformers import BertModel, RobertaModel
 
 from utils.seq import *
+from utils.config import CFG
 
 class TaggerConfig:
     def __init__(self):
@@ -386,7 +387,10 @@ class BertABSATagger(nn.Module):
         self.num_labels = bert_config.num_labels
         self.tagger_config = TaggerConfig()
         self.tagger_config.absa_type = bert_config.absa_type.lower()
-        self.bert = BertModel.from_pretrained(pretrained_model)
+        if CFG.TRANSFORMER_NAME == 'bert-base-uncased':
+            self.bert = BertModel.from_pretrained(pretrained_model)
+        else:
+            self.bert = RobertaModel.from_pretrained(pretrained_model)
         self.bert_dropout = nn.Dropout(bert_config.hidden_dropout_prob)
 
         self.tagger = None

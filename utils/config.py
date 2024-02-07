@@ -9,6 +9,7 @@ class Config():
         # self.BATCH_SIZE = 16 # 1500 steps as 16 bs => 9 epochs on rest 
         self.NUM_LAYERS_FROZEN = 8
         self.MODEL_NAME = "laptop_bert_uncased_v4"
+        self.TRANSFORMER_NAME = ""
         self.LEARNING_RATE = 2e-5
         self.DATA_PATH = ''
         self.SAVE_PATH = './experiments'
