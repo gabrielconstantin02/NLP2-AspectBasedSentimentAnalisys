@@ -19,7 +19,6 @@ def plot_extra(accuracies_macro, accuracies_micro):
     epochs_list = range(CFG.EPOCHS)
 
     # creating the 4 plots
-    import pdb; pdb.set_trace();
     axis[0].plot(epochs_list, accuracies_macro)
     axis[0].set_title("Val macro")
     axis[1].plot(epochs_list, accuracies_micro)
